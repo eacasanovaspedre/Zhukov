@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net5.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Utils.fs" />
+    <Compile Include="Flux.Concurrency.fs" />
+    <Compile Include="Zhukov.Connection.fs" />
+    <Compile Include="Broker.Root.fs" />
+    <Compile Include="Broker.Durable.fs" />
+    <Compile Include="Zhukov.Consumer.fs" />
+    <Compile Include="Zhukov.Listener.fs" />
+    <Compile Include="GracefulShutdown.fs" />
+    <Compile Include="Logary.fs" />
+    <Compile Include="Logging.fs" />
+    <Compile Include="Program.fs" />
+    <Content Include=".gitignore" />
+  </ItemGroup>
+  <Import Project=".paket\Paket.Restore.targets" />
+</Project>

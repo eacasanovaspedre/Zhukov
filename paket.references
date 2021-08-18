@@ -1,0 +1,10 @@
+FSharp.Core
+Flux.Core
+FSharpPlus
+NodaTime
+Hopac
+System.IO.Pipelines
+Logary
+FSharp.Control.Reactive
+Flux.Collections
+FsRandom
