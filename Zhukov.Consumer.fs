@@ -1,6 +1,5 @@
 ﻿module Zhukov.Broker.Consumer
 
-open Aether
 open Flux
 open Flux.Collections
 open Flux.Concurrency
@@ -12,21 +11,23 @@ open FsRandom
 open Zhukov
 open Zhukov.Random
 
-type private 'Queue Queue =
-    { Queue: 'Queue
+type private 'DurableQueue Queue =
+    { DurableQueue: 'DurableQueue
       DeliveredCount: Offset }
 
 [<AutoOpen>]
 module private Queue =
-    let create q d = { Queue = q; DeliveredCount = d }
+    let create q d =
+        { DurableQueue = q; DeliveredCount = d }
 
-    let inline _queue f q =
-        f q.Queue <&> fun x -> { q with Queue = x }
-        
+    let inline _durableQueue f q =
+        f q.DurableQueue
+        <&> fun x -> { q with DurableQueue = x }
+
     let inline _deliveredCount f q =
         f q.DeliveredCount
         <&> fun x -> { q with DeliveredCount = x }
-        
+
 type CouldNotAck =
     | KeyNotFound of MessageKey
     | OffsetOutOfRange of
@@ -39,27 +40,32 @@ type Action<'T, 'Queue> =
     | Ack of key: MessageKey * offset: Offset * replyCh: Result<Offset, CouldNotAck> IVar
     | SetWantedCount of count: int
     | AddQueue of key: MessageKey * queue: 'Queue
-
-let private getQueue { Queue = q } = q
-
-let private setQueue v q = { q with Queue = v }
-
-let private getDeliveredCount { DeliveredCount = d } = d
+    | NewMessage of key: MessageKey * message: 'T
 
 let private agent
     randomState
-    (queueOps: {| Count: _
-                  ToSeq: _
-                  Offset: _
-                  Pop: _ |})
+    (durableQueueOps: {| Count: _
+                         ToSeq: _
+                         Offset: _
+                         Pop: _
+                         Push: _ |})
     releaseQueue
-    clientId
-    client
     takeMsg
     =
-    let inline qCount q = q |> view _queue |> queueOps.Count
-    let inline qOffset q = q |> view _queue |> queueOps.Offset
-    let inline qToSeq q = q |> view _queue |> queueOps.ToSeq
+    let inline durableQueueCount q =
+        q |> view _durableQueue |> durableQueueOps.Count
+
+    let inline durableQueueOffset q =
+        q |> view _durableQueue |> durableQueueOps.Offset
+
+    let inline durableQueueToSeq q =
+        q |> view _durableQueue |> durableQueueOps.ToSeq
+
+    let inline durableQueuePop o q =
+        over _durableQueue (durableQueueOps.Pop o) q
+
+    let inline durableQueuePush x q =
+        over _durableQueue (durableQueueOps.Push x) q
 
     let rec loop
         (data: {| Queues: _
@@ -78,21 +84,21 @@ let private agent
                         |> Seq.filter
                             (fun (KVEntry (_, q)) ->
                                 view _deliveredCount q = zeroOffset
-                                && qCount q > 0)
+                                && durableQueueCount q > 0)
                         |> Seq.toArray
                         |> sample data.RandomState conKeyMax
                         |> (_2
                             %-> List.map
                                     (fun (KVEntry (k, q)) ->
-                                        let deliverCount = min msgCountMax (qCount q)
+                                        let deliverCount = min msgCountMax (durableQueueCount q)
 
                                         let items =
                                             q
-                                            |> qToSeq
+                                            |> durableQueueToSeq
                                             |> Seq.truncate deliverCount
                                             |> Seq.toArray
 
-                                        k, items, qOffset q))
+                                        k, items, durableQueueOffset q))
 
                     let queues =
                         keysToSend
@@ -117,12 +123,12 @@ let private agent
                     |> Hamt.maybeModifyAndRet'
                         key
                         (fun q ->
-                            let currentOffset = qOffset q
+                            let currentOffset = durableQueueOffset q
                             let maxOffset = currentOffset + view _deliveredCount q
 
                             if offset <= maxOffset then
-                                { Queue = queueOps.Pop offset q.Queue
-                                  DeliveredCount = zeroOffset },
+                                setl _deliveredCount zeroOffset
+                                <| durableQueuePop offset q,
                                 Ok offset
                             else
                                 q,
@@ -139,7 +145,7 @@ let private agent
                                      if Hamt.count qs > data.QueueWantedCount then
                                          qs
                                          |> Hamt.findAndRemove key
-                                         |> fun (q, qs') -> q |> view _queue |> releaseQueue >>-. qs'
+                                         |> fun (q, qs') -> q |> view _durableQueue |> releaseQueue >>-. qs'
                                      else
                                          Job.result qs)
                                  (fun _ -> Job.result qs)
@@ -150,8 +156,13 @@ let private agent
                     {| data with
                            Queues =
                                data.Queues
-                               |> Hamt.add key (Queue.create queue zeroOffset)
+                               |> Hamt.add key (create queue zeroOffset)
                            QueueWantedCount = data.QueueWantedCount + 1 |}
+                    |> loop
+                | NewMessage (key, message) -> //TODO: In case the key is not here it should give it back
+                    data.Queues
+                    |> Hamt.maybeModify' key (durableQueuePush message)
+                    |> fun qs -> {| data with Queues = qs |}
                     |> loop
 
     loop
@@ -159,5 +170,5 @@ let private agent
            QueueWantedCount = 0
            RandomState = randomState |}
 
-let create randomState queueOps releaseQueue clientId client =
-    AgentMailboxStop.create (agent randomState queueOps releaseQueue clientId client)
+let create randomState queueOps releaseQueue =
+    AgentMailboxStop.create (agent randomState queueOps releaseQueue)
