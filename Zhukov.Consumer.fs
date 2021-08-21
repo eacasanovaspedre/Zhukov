@@ -104,7 +104,7 @@ let private agent
                         keysToSend
                         |> Seq.fold
                             (fun qs (k, items, _) ->
-                                Hamt.modify
+                                Hamt.findAndSet
                                     k
                                     (items
                                      |> Array.length
@@ -120,24 +120,24 @@ let private agent
                                     RandomState = randomState |}
                 | Ack (key, offset, replyCh) ->
                     data.Queues
-                    |> Hamt.maybeModifyAndRet'
+                    |> Hamt.maybeFind
                         key
+                    |> Option.map
                         (fun q ->
                             let currentOffset = durableQueueOffset q
                             let maxOffset = currentOffset + view _deliveredCount q
 
                             if offset <= maxOffset then
-                                setl _deliveredCount zeroOffset
-                                <| durableQueuePop offset q,
+                                Hamt.add key (setl _deliveredCount zeroOffset (durableQueuePop offset q)) data.Queues, //TODO: it should not be zero, but the actual remaining non ack delivered
                                 Ok offset
                             else
-                                q,
+                                data.Queues,
                                 {| MaxOffset = maxOffset
                                    MinOffset = currentOffset
                                    RequestedOffset = offset |}
                                 |> OffsetOutOfRange
                                 |> Error)
-                    |> fun (qs, r) -> qs, Option.defaultWith (fun () -> key |> CouldNotAck.KeyNotFound |> Error) r
+                    |> Option.defaultWith (fun () -> data.Queues, key |> CouldNotAck.KeyNotFound |> Error)
                     |> fun (qs, r) ->
                         r |> IVar.fill replyCh
                         >>=. Result.either
@@ -161,7 +161,7 @@ let private agent
                     |> loop
                 | NewMessage (key, message) -> //TODO: In case the key is not here it should give it back
                     data.Queues
-                    |> Hamt.maybeModify' key (durableQueuePush message)
+                    |> Hamt.maybeFindAndSet' key (durableQueuePush message)
                     |> fun qs -> {| data with Queues = qs |}
                     |> loop
 
