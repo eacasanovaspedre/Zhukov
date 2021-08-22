@@ -26,4 +26,4 @@ let private agent createConsumer durableId takeMsg =
     loop {| Consumers = Hamt.empty |}
 
 let create createConsumer durableId =
-    AgentMailboxStop.create (agent createConsumer durableId)
+    MailboxProcessorStop.create (agent createConsumer durableId)

@@ -75,7 +75,7 @@ let private shutdownAgent onShutdownReceived onMsgReceived onModShuttingDown onM
     agentLoop Map.empty
 
 let shutdownJob onShutdownReceived onMsgReceived onModShuttingDown onModShutDown =
-    AgentMailboxStop.create
+    MailboxProcessorStop.create
     <| shutdownAgent
         (Option.defaultValue ignore onShutdownReceived)
         (Option.defaultValue ignore onMsgReceived)
@@ -84,19 +84,19 @@ let shutdownJob onShutdownReceived onMsgReceived onModShuttingDown onModShutDown
     >>- tap (fun x ->
                 AppDomain.CurrentDomain.ProcessExit.Subscribe
                     (fun _ ->
-                        AgentMailboxStop.stop x.Mailbox >>=. x.Stopped
+                        MailboxProcessorStop.stop x.Mailbox >>=. x.Stopped
                         |> run)
                 |> ignore
 
                 Console.CancelKeyPress.Subscribe
                     (fun _ ->
-                        AgentMailboxStop.stop x.Mailbox >>=. x.Stopped
+                        MailboxProcessorStop.stop x.Mailbox >>=. x.Stopped
                         |> run)
                 |> ignore)
 
 let register jobId jobShutdown jobDependencies mailbox =
-    AgentMailboxStop.sendAndAwaitReply mailbox (fun ivar -> Register(jobId, jobShutdown, jobDependencies, ivar))
+    MailboxProcessorStop.sendAndAwaitReply mailbox (fun ivar -> Register(jobId, jobShutdown, jobDependencies, ivar))
 
 let unregister jobId mailbox =
-    AgentMailboxStop.send mailbox (Unregister jobId)
+    MailboxProcessorStop.send mailbox (Unregister jobId)
     >>- (konst jobId)

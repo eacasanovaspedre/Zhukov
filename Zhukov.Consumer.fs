@@ -40,7 +40,7 @@ type Action<'T, 'Queue> =
     | Ack of key: MessageKey * offset: Offset * replyCh: Result<Offset, CouldNotAck> IVar
     | SetWantedCount of count: int
     | AddQueue of key: MessageKey * queue: 'Queue
-    | NewMessage of key: MessageKey * message: 'T
+    | NewMessage of key: MessageKey * message: 'T * returnIt: (MessageKey -> 'T -> unit Job)
 
 let private agent
     randomState
@@ -87,8 +87,9 @@ let private agent
                                 && durableQueueCount q > 0)
                         |> Seq.toArray
                         |> sample data.RandomState conKeyMax
-                        |> (_2
-                            %-> List.map
+                        |> (over
+                                _2
+                                (List.map
                                     (fun (KVEntry (k, q)) ->
                                         let deliverCount = min msgCountMax (durableQueueCount q)
 
@@ -98,7 +99,7 @@ let private agent
                                             |> Seq.truncate deliverCount
                                             |> Seq.toArray
 
-                                        k, items, durableQueueOffset q))
+                                        k, items, durableQueueOffset q)))
 
                     let queues =
                         keysToSend
@@ -120,22 +121,26 @@ let private agent
                                     RandomState = randomState |}
                 | Ack (key, offset, replyCh) ->
                     data.Queues
-                    |> Hamt.maybeFind
-                        key
+                    |> Hamt.maybeFind key
                     |> Option.map
                         (fun q ->
                             let currentOffset = durableQueueOffset q
                             let maxOffset = currentOffset + view _deliveredCount q
 
-                            if offset <= maxOffset then
-                                Hamt.add key (setl _deliveredCount zeroOffset (durableQueuePop offset q)) data.Queues, //TODO: it should not be zero, but the actual remaining non ack delivered
+                            if currentOffset < offset && offset <= maxOffset then
+                                let diff = offset - currentOffset
+
+                                Hamt.add
+                                    key
+                                    (over _deliveredCount (fun c -> c - diff) (durableQueuePop offset q))
+                                    data.Queues,
                                 Ok offset
                             else
                                 data.Queues,
                                 {| MaxOffset = maxOffset
                                    MinOffset = currentOffset
                                    RequestedOffset = offset |}
-                                |> OffsetOutOfRange
+                                |> CouldNotAck.OffsetOutOfRange
                                 |> Error)
                     |> Option.defaultWith (fun () -> data.Queues, key |> CouldNotAck.KeyNotFound |> Error)
                     |> fun (qs, r) ->
@@ -159,11 +164,12 @@ let private agent
                                |> Hamt.add key (create queue zeroOffset)
                            QueueWantedCount = data.QueueWantedCount + 1 |}
                     |> loop
-                | NewMessage (key, message) -> //TODO: In case the key is not here it should give it back
+                | NewMessage (key, message, returnIt) ->
                     data.Queues
-                    |> Hamt.maybeFindAndSet' key (durableQueuePush message)
-                    |> fun qs -> {| data with Queues = qs |}
-                    |> loop
+                    |> Hamt.maybeFindAndSet key (durableQueuePush message)
+                    |> Option.map (fun qs -> Job.result {| data with Queues = qs |})
+                    |> Option.defaultValue (returnIt key message >>-. data)
+                    >>= loop
 
     loop
         {| Queues = Hamt.empty
@@ -171,4 +177,4 @@ let private agent
            RandomState = randomState |}
 
 let create randomState queueOps releaseQueue =
-    AgentMailboxStop.create (agent randomState queueOps releaseQueue)
+    MailboxProcessorStop.create (agent randomState queueOps releaseQueue)

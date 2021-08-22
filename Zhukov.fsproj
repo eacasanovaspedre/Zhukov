@@ -6,7 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Utils.fs" />
-    <Compile Include="Flux.Concurrency.fs" />
     <Compile Include="Zhukov.Connection.fs" />
     <Compile Include="Broker.Root.fs" />
     <Compile Include="Broker.Durable.fs" />

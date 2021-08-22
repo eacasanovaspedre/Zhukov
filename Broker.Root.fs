@@ -26,6 +26,7 @@ type DurableId = DurableId of ChannelId * GroupId
 [<Struct>]
 type Offset = Offset of int64 with
     static member (+) (Offset a, Offset b) = Offset (a + b)
+    static member (-) (Offset a, Offset b) = Offset (a - b)
     static member Zero = Offset 0L
 
 [<AutoOpen>]
@@ -66,4 +67,4 @@ module Root =
         loop {| Durables = Hamt.empty |}
 
     let create createDurable sendClientToDurable =
-        AgentMailboxStop.create (agent createDurable sendClientToDurable)
+        MailboxProcessorStop.create (agent createDurable sendClientToDurable)

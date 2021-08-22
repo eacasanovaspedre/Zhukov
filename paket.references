@@ -7,4 +7,5 @@ System.IO.Pipelines
 Logary
 FSharp.Control.Reactive
 Flux.Collections
+Flux.Concurrency
 FsRandom

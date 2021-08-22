@@ -1,9 +1,10 @@
 source https://api.nuget.org/v3/index.json
 
 storage:none
-nuget Flux.Collections
-nuget FSharp.Core
 nuget Flux.Core
+nuget Flux.Collections
+nuget Flux.Concurrency
+nuget FSharp.Core
 nuget FSharpPlus
 nuget NodaTime
 nuget Hopac
