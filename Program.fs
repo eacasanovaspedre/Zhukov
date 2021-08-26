@@ -46,7 +46,8 @@ let main argv =
                        fun x q ->
                            { q with
                                  Durable.Queue = Flux.Collections.Queue.snoc x q.Queue }
-                   ToSeq = fun { Durable.Queue = q; Offset = o } -> Flux.Collections.Queue.toSeq q |}
+                   ToSeq = fun { Durable.Queue = q; Offset = o } -> Flux.Collections.Queue.toSeq q
+                   Return = fun x -> Job.result () |}
                 (fun x -> Job.result ())
 
         let! consumerShutdownId =
@@ -54,7 +55,8 @@ let main argv =
                 (Some "consumer1")
                 (fun () ->
                     MailboxProcessorStop.stop consumer1.Mailbox
-                    >>=. consumer1.Stopped)
+                    >>=. consumer1.Stopped
+                    >>- ignore)
                 []
                 shutdown.Mailbox
 

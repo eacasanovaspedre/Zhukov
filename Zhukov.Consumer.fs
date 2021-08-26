@@ -47,8 +47,9 @@ let private agent
                          ToSeq: _
                          Offset: _
                          Pop: _
-                         Push: _ |})
-    releaseQueue
+                         Push: _
+                         Return: _ |})
+    sendShutdownToClient
     takeMsg
     =
     let inline durableQueueCount q =
@@ -73,7 +74,11 @@ let private agent
         =
         takeMsg ()
         >>= function
-            | Stop () -> Job.result ()
+            | Stop () ->
+                sendShutdownToClient ()
+                >>-. (data.Queues
+                      |> Hamt.toSeq
+                      |> Seq.map (fun (KVEntry (k, v)) -> k, view _durableQueue v))
             | Msg action ->
                 match action with
                 | Poll (conKeyMax, msgCountMax, replyCh) ->
@@ -149,7 +154,9 @@ let private agent
                                      if Hamt.count qs > data.QueueWantedCount then
                                          qs
                                          |> Hamt.findAndRemove key
-                                         |> fun (q, qs') -> q |> view _durableQueue |> releaseQueue >>-. qs'
+                                         |> fun (q, qs') ->
+                                             q |> view _durableQueue |> durableQueueOps.Return
+                                             >>-. qs'
                                      else
                                          Job.result qs)
                                  (fun _ -> Job.result qs)
@@ -175,5 +182,5 @@ let private agent
            QueueWantedCount = 0
            RandomState = randomState |}
 
-let create randomState queueOps releaseQueue =
-    MailboxProcessorStop.create (agent randomState queueOps releaseQueue)
+let create randomState queueOps sendShutdownToClient =
+    MailboxProcessorStop.create (agent randomState queueOps sendShutdownToClient)
