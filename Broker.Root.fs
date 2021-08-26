@@ -9,7 +9,7 @@ open Hopac.Infixes
 open NodaTime
 
 [<Struct>]
-type ClientId = ClientId of NEString
+type ConsumerId = ConsumerId of NEString
 
 [<Struct>]
 type ChannelId = ChannelId of NEString
@@ -42,7 +42,7 @@ module Root =
 
     type Action<'Client> =
         | AddMessage of ChannelId * MessageKey * Message //TODO
-        | NewClient of DurableId * ClientId * 'Client
+        | NewConsumer of DurableId * ConsumerId * 'Client
 
     let private agent createDurable sendClientToDurable takeMsg =
         let rec loop (data: {| Durables: Hamt<_, _> |}) =
@@ -52,7 +52,7 @@ module Root =
                 | Msg action ->
                     match action with
                     | AddMessage (ch, key, msg) -> loop data
-                    | NewClient (durableId, clientId, client) ->
+                    | NewConsumer (durableId, consumerId, client) ->
                         Hamt.maybeFind durableId data.Durables
                         |> Option.map (fun durable -> Job.result (durable, data.Durables))
                         |> Option.defaultWith
@@ -60,7 +60,7 @@ module Root =
                                 createDurable durableId
                                 >>- (fun durable -> durable, Hamt.add durableId durable data.Durables))
                         >>= fun (durable, durables) ->
-                                sendClientToDurable clientId client durable
+                                sendClientToDurable consumerId client durable
                                 >>-. {| data with Durables = durables |}
                         >>= loop
 

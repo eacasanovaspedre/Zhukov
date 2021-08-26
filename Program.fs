@@ -98,7 +98,7 @@ let main argv =
         do!
             MailboxProcessorStop.send
                 consumer1.Mailbox
-                (Consumer.Action.NewMessage(
+                (Consumer.Action.AddMessage(
                     MessageKey(Flux.Text.stringToBytesUTF8 "k1"),
                     "message1",
                     fun _ _ -> Job.unit ()

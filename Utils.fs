@@ -4,6 +4,17 @@ module Operators =
 
     let inline ignore2 _ _ = ()
 
+module Hamt =
+    open FSharpPlus
+    open FSharpPlus.Lens
+    open Flux.Collections.Hamt.Lens
+
+    module Lens =
+
+        let inline _key k f = let g, s = _key k in lens g (flip s) f
+
+        let inline _keyMaybe k f = let g, s = _keyMaybe k in lens g (flip s) f
+
 module Random =
     open Operators
     open FsRandom

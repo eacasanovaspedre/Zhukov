@@ -8,7 +8,6 @@ open Hopac
 open Hopac.Infixes
 open FSharpPlus.Lens
 open FsRandom
-open Zhukov
 open Zhukov.Random
 
 type private 'DurableQueue Queue =
@@ -40,7 +39,7 @@ type Action<'T, 'Queue> =
     | Ack of key: MessageKey * offset: Offset * replyCh: Result<Offset, CouldNotAck> IVar
     | SetWantedCount of count: int
     | AddQueue of key: MessageKey * queue: 'Queue
-    | NewMessage of key: MessageKey * message: 'T * returnIt: (MessageKey -> 'T -> unit Job)
+    | AddMessage of key: MessageKey * message: 'T * returnIt: (MessageKey -> 'T -> unit Job)
 
 let private agent
     randomState
@@ -164,7 +163,7 @@ let private agent
                                |> Hamt.add key (create queue zeroOffset)
                            QueueWantedCount = data.QueueWantedCount + 1 |}
                     |> loop
-                | NewMessage (key, message, returnIt) ->
+                | AddMessage (key, message, returnIt) ->
                     data.Queues
                     |> Hamt.maybeFindAndSet key (durableQueuePush message)
                     |> Option.map (fun qs -> Job.result {| data with Queues = qs |})
