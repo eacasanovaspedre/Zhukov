@@ -47,8 +47,8 @@ let private agent
                          ToSeq: _
                          Offset: _
                          Pop: _
-                         Push: _
-                         Return: _ |})
+                         Push: _ |})
+    (msgParent: {| Return: _ |})
     sendShutdownToClient
     takeMsg
     =
@@ -155,7 +155,7 @@ let private agent
                                          qs
                                          |> Hamt.findAndRemove key
                                          |> fun (q, qs') ->
-                                             q |> view _durableQueue |> durableQueueOps.Return
+                                             q |> view _durableQueue |> msgParent.Return
                                              >>-. qs'
                                      else
                                          Job.result qs)
@@ -182,5 +182,5 @@ let private agent
            QueueWantedCount = 0
            RandomState = randomState |}
 
-let create randomState queueOps sendShutdownToClient =
-    MailboxProcessorStop.create (agent randomState queueOps sendShutdownToClient)
+let create randomState durableQueueOps msgParent sendShutdownToClient =
+    MailboxProcessorStop.create (agent randomState durableQueueOps msgParent sendShutdownToClient)

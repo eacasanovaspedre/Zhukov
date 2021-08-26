@@ -46,8 +46,8 @@ let main argv =
                        fun x q ->
                            { q with
                                  Durable.Queue = Flux.Collections.Queue.snoc x q.Queue }
-                   ToSeq = fun { Durable.Queue = q; Offset = o } -> Flux.Collections.Queue.toSeq q
-                   Return = fun x -> Job.result () |}
+                   ToSeq = fun { Durable.Queue = q; Offset = o } -> Flux.Collections.Queue.toSeq q |}
+                {| Return = fun x -> Job.result () |}
                 (fun x -> Job.result ())
 
         let! consumerShutdownId =

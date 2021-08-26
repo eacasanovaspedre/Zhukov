@@ -45,18 +45,32 @@ module private Data =
     let inline addConsumer clientId consumer =
         over _Consumers (Hamt.add clientId (consumer, Set.empty))
 
-let private agent (consumerOps: {| Create: _; AddMessage: _ |}) durableId takeMsg =
+let private agent durableId createConsumer saveOffset (msgConsumer: {| AddMessage: _; Stop: _ |}) takeMsg =
     let selfCh = Ch<_>()
+    let saveOffset = saveOffset durableId
 
     let rec loop (data: Data<'T, _>) =
         (Ch.take selfCh <|> takeMsg ())
         >>= function
-            | Stop () -> Job.result ()
+            | Stop () ->
+                data
+                |> view Data._Consumers
+                |> Hamt.toSeq
+                |> Seq.map (
+                    KVEntry.value
+                    >> fst
+                    >> msgConsumer.Stop
+                    >> Job.bind (fun (key, queue) -> queue |> view Queue._Offset |> saveOffset key)
+                )
+                |> Job.conIgnore
             | Msg action ->
                 match action with
                 | AddConsumer (consumerId, client) ->
-                    consumerOps.Create consumerId client
-                    >>= fun consumer -> data |> Data.addConsumer consumerId consumer |> loop
+                    createConsumer consumerId client
+                    >>= fun consumer ->
+                            data
+                            |> Data.addConsumer consumerId consumer
+                            |> loop
                 | AddMessage (key, message: 'T) ->
                     let inline _freeQueueForKey f = ((_keyMaybe key) >> Data._FreeQueues) f
 
@@ -76,7 +90,7 @@ let private agent (consumerOps: {| Create: _; AddMessage: _ |}) durableId takeMs
                         | Some consumerId ->
                             let consumer, _ = view (_consumerForKey consumerId) data
 
-                            consumerOps.AddMessage
+                            msgConsumer.AddMessage
                                 consumer
                                 key
                                 message
@@ -89,5 +103,5 @@ let private agent (consumerOps: {| Create: _; AddMessage: _ |}) durableId takeMs
           ConsumerQueues = Hamt.empty
           FreeQueues = Hamt.empty }
 
-let create consumerOps durableId =
-    MailboxProcessorStop.create (agent consumerOps durableId)
+let create durableId createConsumer saveOffset msgConsumer =
+    MailboxProcessorStop.create (agent durableId createConsumer saveOffset msgConsumer)

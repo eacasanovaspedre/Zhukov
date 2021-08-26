@@ -9,7 +9,7 @@
     <Compile Include="Zhukov.Connection.fs" />
     <Compile Include="Broker.Root.fs" />
     <Compile Include="Broker.Durable.fs" />
-    <Compile Include="Zhukov.Consumer.fs" />
+    <Compile Include="Broker.Consumer.fs" />
     <Compile Include="Zhukov.Listener.fs" />
     <Compile Include="GracefulShutdown.fs" />
     <Compile Include="Logary.fs" />
