@@ -70,16 +70,26 @@ let private agent
     let rec loop
         (data: {| Queues: _
                   QueueWantedCount: _
-                  RandomState: _ |})
+                  RandomState: _
+                  Stopping: _ |})
         =
-        takeMsg ()
+        takeMsg () ^-> Choice1Of2
+        <|> (if data.Stopping then
+                 Alt.unit ()
+             else
+                 Alt.never ())
+            ^-> Choice2Of2
         >>= function
-            | Stop () ->
+            | Choice2Of2 _ ->
+                data.Queues
+                |> Hamt.toSeq
+                |> Seq.map (fun (KVEntry (k, v)) -> k, view _durableQueue v)
+                |> Job.result
+            | Choice1Of2 (Stop ()) ->
                 sendShutdownToClient ()
-                >>-. (data.Queues
-                      |> Hamt.toSeq
-                      |> Seq.map (fun (KVEntry (k, v)) -> k, view _durableQueue v))
-            | Msg action ->
+                >>-. {| data with Stopping = true |}
+                >>= loop
+            | Choice1Of2 (Msg action) ->
                 match action with
                 | Poll (conKeyMax, msgCountMax, replyCh) ->
                     let randomState, keysToSend =
@@ -180,7 +190,8 @@ let private agent
     loop
         {| Queues = Hamt.empty
            QueueWantedCount = 0
-           RandomState = randomState |}
+           RandomState = randomState
+           Stopping = false |}
 
 let create randomState durableQueueOps msgParent sendShutdownToClient =
     MailboxProcessorStop.create (agent randomState durableQueueOps msgParent sendShutdownToClient)
