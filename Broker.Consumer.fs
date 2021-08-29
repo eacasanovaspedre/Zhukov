@@ -3,9 +3,13 @@
 open Flux
 open Flux.Collections
 open Flux.Concurrency
-open FSharpPlus
 open Hopac
 open Hopac.Infixes
+open FSharpPlus
+open FSharpPlus.Operators
+open FSharpPlus.Lens
+open Zhukov.FSharpPlusHopac
+open Zhukov.FSharpPlusHopac
 open FSharpPlus.Lens
 open FsRandom
 open Zhukov.Random
@@ -73,23 +77,22 @@ let private agent
                   RandomState: _
                   Stopping: _ |})
         =
-        takeMsg () ^-> Choice1Of2
+        takeMsg ()
         <|> (if data.Stopping then
-                 Alt.unit ()
+                 Alt.always (Stop())
              else
                  Alt.never ())
-            ^-> Choice2Of2
         >>= function
-            | Choice2Of2 _ ->
+            | Stop _ when data.Stopping ->
                 data.Queues
                 |> Hamt.toSeq
-                |> Seq.map (fun (KVEntry (k, v)) -> k, view _durableQueue v)
-                |> Job.result
-            | Choice1Of2 (Stop ()) ->
+                |> Seq.map (fun (KVEntry (k, v)) -> msgParent.Return k (view _durableQueue v))
+                |> Job.conIgnore
+            | Stop _ ->
                 sendShutdownToClient ()
                 >>-. {| data with Stopping = true |}
                 >>= loop
-            | Choice1Of2 (Msg action) ->
+            | Msg action ->
                 match action with
                 | Poll (conKeyMax, msgCountMax, replyCh) ->
                     let randomState, keysToSend =
@@ -165,7 +168,7 @@ let private agent
                                          qs
                                          |> Hamt.findAndRemove key
                                          |> fun (q, qs') ->
-                                             q |> view _durableQueue |> msgParent.Return
+                                             q |> view _durableQueue |> msgParent.Return key
                                              >>-. qs'
                                      else
                                          Job.result qs)

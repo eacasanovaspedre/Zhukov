@@ -13,7 +13,8 @@ module Hamt =
 
         let inline _key k f = let g, s = _key k in lens g (flip s) f
 
-        let inline _keyMaybe k f = let g, s = _keyMaybe k in lens g (flip s) f
+        let inline _keyMaybe k f =
+            let g, s = _keyMaybe k in lens g (flip s) f
 
 module Random =
     open Operators
@@ -41,3 +42,23 @@ module Random =
         |> Seq.filter (fun (_, count, need, _) -> need = 0 || count = 0)
         |> Seq.head
         |> fun (rState, _, _, chosen) -> rState, chosen
+
+module FSharpPlusHopac =
+    open Hopac
+    open FSharpPlus.Control
+
+    type BindWithHopac =
+        inherit Bind
+        static member inline (>>=)(source: Job<'T>, f: 'T -> Job<'U>) = Job.bind f source
+
+#if !FABLE_COMPILER || FABLE_COMPILER_3
+        static member inline Invoke1 (source: '``Monad<'T>``) (binder: 'T -> '``Monad<'U>``) : '``Monad<'U>`` =
+            let inline call (_mthd: 'M, input: 'I, _output: 'R, f) =
+                ((^M or ^I or ^R): (static member (>>=) : _ * _ -> _) input, f)
+
+            call (Unchecked.defaultof<BindWithHopac>, source, Unchecked.defaultof<'``Monad<'U>``>, binder)
+#endif
+
+    let inline (>>=) x f = BindWithHopac.Invoke1 x f
+
+    let inline (<|>) a1 a2 = Hopac.Infixes.op_LessBarGreater a1 a2

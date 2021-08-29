@@ -4,7 +4,10 @@ open Flux.Collections
 open Flux.Concurrency
 open Hopac
 open Hopac.Infixes
+open FSharpPlus
+open FSharpPlus.Operators
 open FSharpPlus.Lens
+open Zhukov.FSharpPlusHopac
 open Zhukov.Hamt.Lens
 
 type 'T Queue =
@@ -23,10 +26,11 @@ type Action<'Client, 'T> =
     | AddConsumer of ConsumerId * 'Client
     | AddMessage of MessageKey * 'T
 
-type private Data<'T, 'Consumer> =
-    { Consumers: Hamt<ConsumerId, 'Consumer * MessageKey Set>
+type private Data<'T, 'ConsumerServer> =
+    { Consumers: Hamt<ConsumerId, {| Server: 'ConsumerServer; AssignedKeys: MessageKey Set; Stopped: unit IVar |}>
       ConsumerQueues: Hamt<MessageKey, ConsumerId>
-      FreeQueues: Hamt<MessageKey, 'T Queue> }
+      FreeQueues: Hamt<MessageKey, 'T Queue>
+      Stopping: bool }
 
 module private Data =
 
@@ -42,36 +46,43 @@ module private Data =
         f d.FreeQueues
         <&> fun x -> { d with FreeQueues = x }
 
-    let inline addConsumer clientId consumer =
-        over _Consumers (Hamt.add clientId (consumer, Set.empty))
+    let inline addConsumer consumerId server consumerStopped =
+        over _Consumers (Hamt.add consumerId {| Server = server; AssignedKeys = Set.empty; Stopped = consumerStopped |})
 
 let private agent durableId createConsumer saveOffset (msgConsumer: {| AddMessage: _; Stop: _ |}) takeMsg =
     let selfCh = Ch<_>()
     let saveOffset = saveOffset durableId
+    
 
-    let rec loop (data: Data<'T, _>) =
-        (Ch.take selfCh <|> takeMsg ())
+    let rec loop (data: Data<_, _>) =
+        Ch.take selfCh
+        <|> takeMsg ()
+        <|> (if data.Stopping then
+                 Alt.always (Stop ())
+             else
+                 Alt.never ())
         >>= function
-            | Stop () ->
-                data
-                |> view Data._Consumers
-                |> Hamt.toSeq
-                |> Seq.map (
-                    KVEntry.value
-                    >> fst
-                    >> msgConsumer.Stop
-                    >> Job.bind (fun (key, queue) -> queue |> view Queue._Offset |> saveOffset key)
-                )
-                |> Job.conIgnore
+            | Stop _ when data.Stopping ->
+                Job.result 1
+            | Stop _ -> Job.result 1
+                // data
+                // |> view Data._Consumers
+                // |> Hamt.toSeq
+                // |> Seq.map (
+                //     KVEntry.value
+                //     >> fst
+                //     >> msgConsumer.Stop
+                // )
+                // |> Job.conIgnore
             | Msg action ->
                 match action with
                 | AddConsumer (consumerId, client) ->
                     createConsumer consumerId client
-                    >>= fun consumer ->
+                    >>= fun (consumer, stopped) ->
                             data
-                            |> Data.addConsumer consumerId consumer
+                            |> Data.addConsumer consumerId consumer stopped
                             |> loop
-                | AddMessage (key, message: 'T) ->
+                | AddMessage (key, message) ->
                     let inline _freeQueueForKey f = ((_keyMaybe key) >> Data._FreeQueues) f
 
                     let inline _consumerQueueForKey f =
@@ -88,10 +99,10 @@ let private agent durableId createConsumer saveOffset (msgConsumer: {| AddMessag
                     | None ->
                         match view _consumerQueueForKey data with
                         | Some consumerId ->
-                            let consumer, _ = view (_consumerForKey consumerId) data
+                            let consumer = view (_consumerForKey consumerId) data
 
                             msgConsumer.AddMessage
-                                consumer
+                                consumer.Server
                                 key
                                 message
                                 (fun k m -> (k, m) |> AddMessage |> Msg |> Ch.send selfCh)
@@ -101,7 +112,8 @@ let private agent durableId createConsumer saveOffset (msgConsumer: {| AddMessag
     loop
         { Consumers = Hamt.empty
           ConsumerQueues = Hamt.empty
-          FreeQueues = Hamt.empty }
+          FreeQueues = Hamt.empty
+          Stopping = false }
 
 let create durableId createConsumer saveOffset msgConsumer =
     MailboxProcessorStop.create (agent durableId createConsumer saveOffset msgConsumer)

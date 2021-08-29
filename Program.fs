@@ -6,9 +6,11 @@ open Hopac
 open Hopac.Infixes
 open Zhukov.Broker
 open Zhukov.Logging
+open FSharpPlusHopac
 
 [<EntryPoint>]
 let main argv =
+
     let logary = runLogary ()
 
     let shutdownJob =
@@ -47,7 +49,7 @@ let main argv =
                            { q with
                                  Durable.Queue = Flux.Collections.Queue.snoc x q.Queue }
                    ToSeq = fun { Durable.Queue = q; Offset = o } -> Flux.Collections.Queue.toSeq q |}
-                {| Return = fun x -> Job.result () |}
+                {| Return = fun x y -> Job.result () |}
                 (fun x -> Job.result ())
 
         let! consumerShutdownId =
