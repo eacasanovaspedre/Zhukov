@@ -15,21 +15,28 @@ open FsRandom
 open Zhukov.Random
 
 type private 'DurableQueue Queue =
-    { DurableQueue: 'DurableQueue
-      DeliveredCount: Offset }
+    { DurableQueue: 'DurableQueue }
 
-[<AutoOpen>]
 module private Queue =
-    let create q d =
-        { DurableQueue = q; DeliveredCount = d }
+    let create q =
+        { DurableQueue = q }
 
-    let inline _durableQueue f q =
+    let inline _DurableQueue f q =
         f q.DurableQueue
         <&> fun x -> { q with DurableQueue = x }
 
-    let inline _deliveredCount f q =
-        f q.DeliveredCount
-        <&> fun x -> { q with DeliveredCount = x }
+    let inline _PoppedDurableQueues f q =
+        f q.PoppedDurableQueues
+        <&> fun x -> { q with PoppedDurableQueues = x }
+
+    let push durablePush x q = over _DurableQueue (durablePush x) q
+
+    let deliver durableCount n q =
+        let deliverCount = n </min/> (durableCount q) //experimenting with </ />
+        let items = 
+
+
+    let pop durablePop toOffset q = 
 
 type CouldNotAck =
     | KeyNotFound of MessageKey
@@ -57,19 +64,19 @@ let private agent
     takeMsg
     =
     let inline durableQueueCount q =
-        q |> view _durableQueue |> durableQueueOps.Count
+        q |> view Queue._durableQueue |> durableQueueOps.Count
 
     let inline durableQueueOffset q =
-        q |> view _durableQueue |> durableQueueOps.Offset
+        q |> view Queue._durableQueue |> durableQueueOps.Offset
 
     let inline durableQueueToSeq q =
-        q |> view _durableQueue |> durableQueueOps.ToSeq
+        q |> view Queue._durableQueue |> durableQueueOps.ToSeq
 
     let inline durableQueuePop o q =
-        over _durableQueue (durableQueueOps.Pop o) q
+        over Queue._durableQueue (durableQueueOps.Pop o) q
 
     let inline durableQueuePush x q =
-        over _durableQueue (durableQueueOps.Push x) q
+        over Queue._durableQueue (durableQueueOps.Push x) q
 
     let rec loop
         (data: {| Queues: _
@@ -86,7 +93,7 @@ let private agent
             | Stop _ when data.Stopping ->
                 data.Queues
                 |> Hamt.toSeq
-                |> Seq.map (fun (KVEntry (k, v)) -> msgParent.Return k (view _durableQueue v))
+                |> map (fun (KVEntry (k, v)) -> msgParent.Return k (view Queue._durableQueue v))
                 |> Job.conIgnore
             | Stop _ ->
                 sendShutdownToClient ()
@@ -97,11 +104,11 @@ let private agent
                 | Poll (conKeyMax, msgCountMax, replyCh) ->
                     let randomState, keysToSend =
                         data.Queues
-                        |> Hamt.toSeq
+                        |> Hamt.toSeqPairs
                         |> Seq.filter
-                            (fun (KVEntry (_, q)) ->
-                                view _deliveredCount q = zeroOffset
-                                && durableQueueCount q > 0)
+                            (fun pair ->
+                                view (_2 << Queue._deliveredCount) pair = zeroOffset
+                                && view (_2 << Queue._durableQueue) pair |> durableQueueOps.Count > 0)
                         |> Seq.toArray
                         |> sample data.RandomState conKeyMax
                         |> (over

@@ -1,9 +1,9 @@
 STORAGE: NONE
 NUGET
   remote: https://api.nuget.org/v3/index.json
-    Flux.Collections (1.3.6-alpha)
+    Flux.Collections (1.3.7-alpha)
       FSharp.Core (>= 5.0.2) - restriction: >= netstandard2.0
-    Flux.Concurrency (1.0.0-alpha)
+    Flux.Concurrency (1.2.0-alpha)
       FSharp.Core (>= 5.0.2) - restriction: >= netstandard2.0
       Hopac (>= 0.5.1) - restriction: >= netstandard2.0
     Flux.Core (1.0)

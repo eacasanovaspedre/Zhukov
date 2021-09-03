@@ -26,8 +26,16 @@ type Action<'Client, 'T> =
     | AddConsumer of ConsumerId * 'Client
     | AddMessage of MessageKey * 'T
 
+type Consumer<'Server> = { Server: 'Server; AssignedKeys: MessageKey Set; Stopped: unit IVar }
+
+module Consumer =
+
+    let inline _Server f c = f c.Server <&> fun x -> { c with Server = x }
+
+    let inline _Stopped f c = f c.Stopped <&> fun x -> { c with Stopped = x }
+
 type private Data<'T, 'ConsumerServer> =
-    { Consumers: Hamt<ConsumerId, {| Server: 'ConsumerServer; AssignedKeys: MessageKey Set; Stopped: unit IVar |}>
+    { Consumers: Hamt<ConsumerId, 'ConsumerServer Consumer>
       ConsumerQueues: Hamt<MessageKey, ConsumerId>
       FreeQueues: Hamt<MessageKey, 'T Queue>
       Stopping: bool }
@@ -47,13 +55,11 @@ module private Data =
         <&> fun x -> { d with FreeQueues = x }
 
     let inline addConsumer consumerId server consumerStopped =
-        over _Consumers (Hamt.add consumerId {| Server = server; AssignedKeys = Set.empty; Stopped = consumerStopped |})
+        over _Consumers (Hamt.add consumerId { Server = server; AssignedKeys = Set.empty; Stopped = consumerStopped })
 
 let private agent durableId createConsumer saveOffset (msgConsumer: {| AddMessage: _; Stop: _ |}) takeMsg =
     let selfCh = Ch<_>()
     let saveOffset = saveOffset durableId
-    
-
     let rec loop (data: Data<_, _>) =
         Ch.take selfCh
         <|> takeMsg ()
@@ -62,18 +68,23 @@ let private agent durableId createConsumer saveOffset (msgConsumer: {| AddMessag
              else
                  Alt.never ())
         >>= function
+            | Stop _ when data.Stopping && Hamt.isEmpty data.Consumers -> Job.unit ()
             | Stop _ when data.Stopping ->
-                Job.result 1
-            | Stop _ -> Job.result 1
-                // data
-                // |> view Data._Consumers
-                // |> Hamt.toSeq
-                // |> Seq.map (
-                //     KVEntry.value
-                //     >> fst
-                //     >> msgConsumer.Stop
-                // )
-                // |> Job.conIgnore
+                data
+                |> view Data._Consumers
+                |> map (KVEntry.value >> view Consumer._Stopped)
+                |> Job.conIgnore
+                >>=. loop data
+            | Stop _ ->
+                data
+                |> view Data._Consumers
+                |> map (
+                    KVEntry.value
+                    >> view Consumer._Server
+                    >> msgConsumer.Stop
+                )
+                |> Job.conIgnore
+                >>=. loop data
             | Msg action ->
                 match action with
                 | AddConsumer (consumerId, client) ->
