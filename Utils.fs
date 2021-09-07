@@ -45,18 +45,16 @@ module Random =
 
 module FSharpPlusHopac =
     open Hopac
-    open FSharpPlus.Control
 
     type BindWithHopac =
-        inherit Bind
-        static member inline (>>=)(source: Job<'T>, f: 'T -> Job<'U>) = Job.bind f source
+        static member inline (>>=) (source: Job<'T>, f: 'T -> Job<'U>): Job<'U> = Job.bind f source
 
 #if !FABLE_COMPILER || FABLE_COMPILER_3
         static member inline Invoke1 (source: '``Monad<'T>``) (binder: 'T -> '``Monad<'U>``) : '``Monad<'U>`` =
-            let inline call (_mthd: 'M, input: 'I, _output: 'R, f) =
-                ((^M or ^I or ^R): (static member (>>=) : _ * _ -> _) input, f)
+            let inline call (_mthd1: ^M1, _mthd2: 'M2, input: 'I, _output: 'R, f) =
+                ((^M1 or ^M2 or ^I or ^R): (static member (>>=) : _ * _ -> _) input, f)
 
-            call (Unchecked.defaultof<BindWithHopac>, source, Unchecked.defaultof<'``Monad<'U>``>, binder)
+            call (Unchecked.defaultof<BindWithHopac>, Unchecked.defaultof<FSharpPlus.Control.Bind>, source, Unchecked.defaultof<'``Monad<'U>``>, binder)
 #endif
 
     let inline (>>=) x f = BindWithHopac.Invoke1 x f

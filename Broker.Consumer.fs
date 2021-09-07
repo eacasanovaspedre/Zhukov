@@ -9,74 +9,91 @@ open FSharpPlus
 open FSharpPlus.Operators
 open FSharpPlus.Lens
 open Zhukov.FSharpPlusHopac
-open Zhukov.FSharpPlusHopac
 open FSharpPlus.Lens
 open FsRandom
 open Zhukov.Random
 
-type private 'DurableQueue Queue =
-    { DurableQueue: 'DurableQueue }
+type private 'DurableQueueActor Queue =
+    { DurableQueueActor: 'DurableQueueActor }
 
 module private Queue =
-    let create q =
-        { DurableQueue = q }
+    let create q = { DurableQueueActor = q }
 
-    let inline _DurableQueue f q =
-        f q.DurableQueue
-        <&> fun x -> { q with DurableQueue = x }
+    let inline _DurableQueueActor f q =
+        f q.DurableQueueActor
+        <&> fun x -> { q with DurableQueueActor = x }
 
-    let inline _PoppedDurableQueues f q =
-        f q.PoppedDurableQueues
-        <&> fun x -> { q with PoppedDurableQueues = x }
+    let headN headNDurable n q =
+        q |> view _DurableQueueActor |> headNDurable n
 
-    let push durablePush x q = over _DurableQueue (durablePush x) q
+    let maybeMoveOffset maybeMoveOffsetDurable offset q =
+        q
+        |> view _DurableQueueActor
+        |> maybeMoveOffsetDurable offset
+        >>- Option.map (fun qs -> setl _DurableQueueActor qs q)
 
-    let deliver durableCount n q =
-        let deliverCount = n </min/> (durableCount q) //experimenting with </ />
-        let items = 
-
-
-    let pop durablePop toOffset q = 
+    let getOffset offsetDurable q =
+        q |> view _DurableQueueActor |> offsetDurable
 
 type CouldNotAck =
     | KeyNotFound of MessageKey
-    | OffsetOutOfRange of
-        {| MaxOffset: Offset
-           MinOffset: Offset
-           RequestedOffset: Offset |}
+    | OffsetOutOfRange of {| RequestedOffset: Offset |}
 
 type Action<'T, 'Queue> =
-    | Poll of conKeyMax: int * msgCountMax: int * replyCh: (MessageKey * 'T array * Offset) list IVar
+    | Poll of conKeyMax: int * msgCountMax: int * replyCh: (MessageKey * 'T Collections.Queue * Offset) list IVar
     | Ack of key: MessageKey * offset: Offset * replyCh: Result<Offset, CouldNotAck> IVar
     | SetWantedCount of count: int
     | AddQueue of key: MessageKey * queue: 'Queue
-    | AddMessage of key: MessageKey * message: 'T * returnIt: (MessageKey -> 'T -> unit Job)
+
+module PollKeyChoosingStrategy =
+
+    let roundRobin headN randomState maxKeys checkTimeout pairs =
+        let timeoutAlt =
+            (checkTimeout
+             |> Option.map (timeOut)
+             |> Option.defaultWith Alt.zero)
+            ^-> (fun () -> None)
+
+        let latch = Latch(maxKeys)
+
+        pairs
+        |> Seq.map
+            (fun (key, queue) ->
+                Alt.choose [ headN 1 queue
+                             >>- fun q ->
+                                     (if Queue.isEmpty q then
+                                          None
+                                      else
+                                          Some(key, queue))
+                                     |> Alt.always
+                             |> Alt.prepare
+                             timeoutAlt
+                             Latch.await latch ^-> (fun _ -> None) ]
+                >>= (function
+                | Some pair -> Latch.decrement latch >>-. Some pair
+                | None -> Job.result None))
+        |> Job.conCollect
+        >>- (Seq.choose id >> Seq.toArray)
+        >>- (sample randomState maxKeys)
+
 
 let private agent
     randomState
-    (durableQueueOps: {| Count: _
-                         ToSeq: _
-                         Offset: _
-                         Pop: _
-                         Push: _ |})
+    (durableQueueOps: {| GetOffset: _
+                         HeadN: _
+                         MaybeMoveOffset: _ |})
     (msgParent: {| Return: _ |})
     sendShutdownToClient
     takeMsg
     =
-    let inline durableQueueCount q =
-        q |> view Queue._durableQueue |> durableQueueOps.Count
 
-    let inline durableQueueOffset q =
-        q |> view Queue._durableQueue |> durableQueueOps.Offset
+    let inline headN n q = Queue.headN durableQueueOps.HeadN n q
 
-    let inline durableQueueToSeq q =
-        q |> view Queue._durableQueue |> durableQueueOps.ToSeq
+    let inline getOffset q =
+        Queue.getOffset durableQueueOps.GetOffset q
 
-    let inline durableQueuePop o q =
-        over Queue._durableQueue (durableQueueOps.Pop o) q
-
-    let inline durableQueuePush x q =
-        over Queue._durableQueue (durableQueueOps.Push x) q
+    let inline maybeMoveOffset toOffset q =
+        Queue.maybeMoveOffset durableQueueOps.MaybeMoveOffset toOffset q
 
     let rec loop
         (data: {| Queues: _
@@ -93,7 +110,7 @@ let private agent
             | Stop _ when data.Stopping ->
                 data.Queues
                 |> Hamt.toSeq
-                |> map (fun (KVEntry (k, v)) -> msgParent.Return k (view Queue._durableQueue v))
+                |> map (fun (KVEntry (k, v)) -> msgParent.Return k (view Queue._DurableQueueActor v))
                 |> Job.conIgnore
             | Stop _ ->
                 sendShutdownToClient ()
@@ -102,100 +119,64 @@ let private agent
             | Msg action ->
                 match action with
                 | Poll (conKeyMax, msgCountMax, replyCh) ->
-                    let randomState, keysToSend =
-                        data.Queues
-                        |> Hamt.toSeqPairs
-                        |> Seq.filter
-                            (fun pair ->
-                                view (_2 << Queue._deliveredCount) pair = zeroOffset
-                                && view (_2 << Queue._durableQueue) pair |> durableQueueOps.Count > 0)
-                        |> Seq.toArray
-                        |> sample data.RandomState conKeyMax
-                        |> (over
-                                _2
-                                (List.map
-                                    (fun (KVEntry (k, q)) ->
-                                        let deliverCount = min msgCountMax (durableQueueCount q)
-
-                                        let items =
-                                            q
-                                            |> durableQueueToSeq
-                                            |> Seq.truncate deliverCount
-                                            |> Seq.toArray
-
-                                        k, items, durableQueueOffset q)))
-
-                    let queues =
-                        keysToSend
-                        |> Seq.fold
-                            (fun qs (k, items, _) ->
-                                Hamt.findAndSet
-                                    k
-                                    (items
-                                     |> Array.length
-                                     |> offset
-                                     |> setl _deliveredCount)
-                                    qs)
-                            data.Queues
-
-                    IVar.fill replyCh keysToSend
-                    >>=. loop
-                             {| data with
-                                    Queues = queues
-                                    RandomState = randomState |}
-                | Ack (key, offset, replyCh) ->
+                    data.Queues
+                    |> Hamt.toSeqPairs
+                    |> PollKeyChoosingStrategy.roundRobin
+                        headN
+                        data.RandomState
+                        conKeyMax
+                        (1000
+                         |> float
+                         |> System.TimeSpan.FromMilliseconds
+                         |> Some)
+                    >>= fun (randomState, pairs) ->
+                            pairs
+                            |> Seq.map
+                                (fun (key, queue) ->
+                                    (headN msgCountMax queue
+                                     >>- fun items -> key, items, getOffset queue))
+                            |> Job.conCollect
+                            >>- fun results -> randomState, results |> Seq.toList
+                    >>= fun (randomState, results) ->
+                            IVar.fill replyCh results
+                            >>-. {| data with
+                                        RandomState = randomState |}
+                    >>= loop
+                | Ack (key, requestedOffset, replyCh) ->
                     data.Queues
                     |> Hamt.maybeFind key
                     |> Option.map
                         (fun q ->
-                            let currentOffset = durableQueueOffset q
-                            let maxOffset = currentOffset + view _deliveredCount q
+                            let currentOffset = getOffset q
 
-                            if currentOffset < offset && offset <= maxOffset then
-                                let diff = offset - currentOffset
+                            let diff = requestedOffset - currentOffset
 
-                                Hamt.add
-                                    key
-                                    (over _deliveredCount (fun c -> c - diff) (durableQueuePop offset q))
-                                    data.Queues,
-                                Ok offset
+                            if diff > zeroOffset && diff < offset 20 then
+                                maybeMoveOffset requestedOffset q
+                                >>- (Option.map (fun q' -> Hamt.add key q' data.Queues, q' |> getOffset |> Ok)
+                                     >> Option.defaultWith
+                                         (fun () ->
+                                             data.Queues,
+                                             {| RequestedOffset = requestedOffset |}
+                                             |> CouldNotAck.OffsetOutOfRange
+                                             |> Error))
                             else
-                                data.Queues,
-                                {| MaxOffset = maxOffset
-                                   MinOffset = currentOffset
-                                   RequestedOffset = offset |}
-                                |> CouldNotAck.OffsetOutOfRange
-                                |> Error)
-                    |> Option.defaultWith (fun () -> data.Queues, key |> CouldNotAck.KeyNotFound |> Error)
-                    |> fun (qs, r) ->
-                        r |> IVar.fill replyCh
-                        >>=. Result.either
-                                 (fun _ ->
-                                     if Hamt.count qs > data.QueueWantedCount then
-                                         qs
-                                         |> Hamt.findAndRemove key
-                                         |> fun (q, qs') ->
-                                             q |> view _durableQueue |> msgParent.Return key
-                                             >>-. qs'
-                                     else
-                                         Job.result qs)
-                                 (fun _ -> Job.result qs)
-                                 r
-                        >>= fun qs' -> loop {| data with Queues = qs' |}
+                                Job.result (
+                                    data.Queues,
+                                    {| RequestedOffset = requestedOffset |}
+                                    |> CouldNotAck.OffsetOutOfRange
+                                    |> Error
+                                ))
+                    |> Option.defaultWith (fun () -> Job.result (data.Queues, key |> CouldNotAck.KeyNotFound |> Error))
+                    >>= fun (qs, r) ->
+                            IVar.fill replyCh r
+                            >>=. loop {| data with Queues = qs |}
                 | SetWantedCount count -> loop {| data with QueueWantedCount = count |}
                 | AddQueue (key, queue) ->
                     {| data with
-                           Queues =
-                               data.Queues
-                               |> Hamt.add key (create queue zeroOffset)
+                           Queues = data.Queues |> Hamt.add key (Queue.create queue)
                            QueueWantedCount = data.QueueWantedCount + 1 |}
                     |> loop
-                | AddMessage (key, message, returnIt) ->
-                    data.Queues
-                    |> Hamt.maybeFindAndSet key (durableQueuePush message)
-                    |> Option.map (fun qs -> Job.result {| data with Queues = qs |})
-                    |> Option.defaultValue (returnIt key message >>-. data)
-                    >>= loop
 
     loop
         {| Queues = Hamt.empty
