@@ -29,34 +29,78 @@ module Random =
 
         let count = Array.length items
 
-        items
-        |> Seq.scan
-            (fun (rState, count, need, chosen) item ->
-                let isChosen, rState = isChosen rState count need
+        if count >= need then
+            rState, List.ofArray items
+        else
+            items
+            |> Seq.scan
+                (fun (rState, count, need, chosen) item ->
+                    let isChosen, rState = isChosen rState count need
 
-                if isChosen then
-                    rState, count - 1, need - 1, item :: chosen
-                else
-                    rState, count - 1, need, chosen)
-            (rState, count, need, [])
-        |> Seq.filter (fun (_, count, need, _) -> need = 0 || count = 0)
-        |> Seq.head
-        |> fun (rState, _, _, chosen) -> rState, chosen
+                    if isChosen then
+                        rState, count - 1, need - 1, item :: chosen
+                    else
+                        rState, count - 1, need, chosen)
+                (rState, count, need, [])
+            |> Seq.filter (fun (_, count, need, _) -> need = 0 || count = 0)
+            |> Seq.head
+            |> fun (rState, _, _, chosen) -> rState, chosen
 
-module FSharpPlusHopac =
-    open Hopac
+namespace Hopac
+
+module FSharpPlus =
 
     type BindWithHopac =
-        static member inline (>>=) (source: Job<'T>, f: 'T -> Job<'U>): Job<'U> = Job.bind f source
+        static member inline (>>=)(source: Job<'T>, f: 'T -> Job<'U>) : Job<'U> = Job.bind f source
 
 #if !FABLE_COMPILER || FABLE_COMPILER_3
         static member inline Invoke1 (source: '``Monad<'T>``) (binder: 'T -> '``Monad<'U>``) : '``Monad<'U>`` =
             let inline call (_mthd1: ^M1, _mthd2: 'M2, input: 'I, _output: 'R, f) =
                 ((^M1 or ^M2 or ^I or ^R): (static member (>>=) : _ * _ -> _) input, f)
 
-            call (Unchecked.defaultof<BindWithHopac>, Unchecked.defaultof<FSharpPlus.Control.Bind>, source, Unchecked.defaultof<'``Monad<'U>``>, binder)
+            call (
+                Unchecked.defaultof<BindWithHopac>,
+                Unchecked.defaultof<FSharpPlus.Control.Bind>,
+                source,
+                Unchecked.defaultof<'``Monad<'U>``>,
+                binder
+            )
 #endif
 
     let inline (>>=) x f = BindWithHopac.Invoke1 x f
 
     let inline (<|>) a1 a2 = Hopac.Infixes.op_LessBarGreater a1 a2
+
+
+module Stream =
+
+    open Hopac.Infixes
+
+    let rec immediately (src: _ Stream) =
+        (src <|> Stream.nil)
+        >>=* function
+            | Stream.Cons (x, xs) -> Stream.cons x (immediately xs)
+            | Stream.Nil -> Stream.nil
+
+    let headN timedOut n stream =
+        let rec loop timeout i acc s =
+            if i = 0 then
+                Job.result acc
+            else
+                s <|> timeout
+                >>= function
+                    | Stream.Cons (x, xs) ->
+                        loop timeout
+                        <| i - 1
+                        <| Flux.Collections.Queue.snoc x acc
+                        <| xs
+                    | Stream.Nil -> Job.result acc
+
+        if n <= 0 then
+            Job.result Flux.Collections.Queue.empty
+        else
+            loop
+            <| timedOut ^-> (fun _ -> Stream.Nil)
+            <| n
+            <| Flux.Collections.Queue.empty
+            <| stream

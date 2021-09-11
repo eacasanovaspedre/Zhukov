@@ -7,7 +7,7 @@ open Hopac.Infixes
 open FSharpPlus
 open FSharpPlus.Operators
 open FSharpPlus.Lens
-open Zhukov.FSharpPlusHopac
+open Hopac.FSharpPlus
 open Zhukov.Hamt.Lens
 
 type 'T Queue =

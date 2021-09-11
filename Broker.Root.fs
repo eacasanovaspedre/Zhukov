@@ -27,6 +27,7 @@ type DurableId = DurableId of ChannelId * GroupId
 type Offset = Offset of int64 with
     static member (+) (Offset a, Offset b) = Offset (a + b)
     static member (-) (Offset a, Offset b) = Offset (a - b)
+    static member op_Explicit (Offset x) = x
     static member Zero = Offset 0L
 
 [<AutoOpen>]

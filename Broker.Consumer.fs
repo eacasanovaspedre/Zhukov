@@ -8,7 +8,7 @@ open Hopac.Infixes
 open FSharpPlus
 open FSharpPlus.Operators
 open FSharpPlus.Lens
-open Zhukov.FSharpPlusHopac
+open Hopac.FSharpPlus
 open FSharpPlus.Lens
 open FsRandom
 open Zhukov.Random
@@ -23,8 +23,10 @@ module private Queue =
         f q.DurableQueueActor
         <&> fun x -> { q with DurableQueueActor = x }
 
-    let headN headNDurable n q =
-        q |> view _DurableQueueActor |> headNDurable n
+    let headN headNDurable timeout n q =
+        q
+        |> view _DurableQueueActor
+        |> headNDurable timeout n
 
     let maybeMoveOffset maybeMoveOffsetDurable offset q =
         q
@@ -40,38 +42,41 @@ type CouldNotAck =
     | OffsetOutOfRange of {| RequestedOffset: Offset |}
 
 type Action<'T, 'Queue> =
-    | Poll of conKeyMax: int * msgCountMax: int * replyCh: (MessageKey * 'T Collections.Queue * Offset) list IVar
+    | Poll of
+        conKeyMax: int *
+        msgCountMax: int *
+        timeout: System.TimeSpan *
+        replyCh: (MessageKey * 'T Collections.Queue * Offset) list IVar
     | Ack of key: MessageKey * offset: Offset * replyCh: Result<Offset, CouldNotAck> IVar
     | SetWantedCount of count: int
     | AddQueue of key: MessageKey * queue: 'Queue
 
 module PollKeyChoosingStrategy =
 
-    let roundRobin headN randomState maxKeys checkTimeout pairs =
-        let timeoutAlt =
-            (checkTimeout
-             |> Option.map (timeOut)
-             |> Option.defaultWith Alt.zero)
-            ^-> (fun () -> None)
-
+    let roundRobin headN randomState timedOut maxKeys pairs =
         let latch = Latch(maxKeys)
 
         pairs
         |> Seq.map
             (fun (key, queue) ->
-                Alt.choose [ headN 1 queue
-                             >>- fun q ->
-                                     (if Queue.isEmpty q then
-                                          None
-                                      else
-                                          Some(key, queue))
-                                     |> Alt.always
-                             |> Alt.prepare
-                             timeoutAlt
-                             Latch.await latch ^-> (fun _ -> None) ]
-                >>= (function
-                | Some pair -> Latch.decrement latch >>-. Some pair
-                | None -> Job.result None))
+                let firstItems =
+                    headN timedOut 1 queue
+                    >>- fun q ->
+                            (if Queue.isEmpty q then
+                                 None
+                             else
+                                 Some(key, queue))
+                            |> Alt.always
+                    |> Alt.prepare
+
+                let enoughReady = Latch.await latch ^-> (fun _ -> None)
+
+                firstItems <|> enoughReady
+                >>= (fun x ->
+                    if Option.isSome x then
+                        Latch.decrement latch >>-. x
+                    else
+                        Job.result None))
         |> Job.conCollect
         >>- (Seq.choose id >> Seq.toArray)
         >>- (sample randomState maxKeys)
@@ -87,7 +92,7 @@ let private agent
     takeMsg
     =
 
-    let inline headN n q = Queue.headN durableQueueOps.HeadN n q
+    let inline headN t n q = Queue.headN durableQueueOps.HeadN t n q
 
     let inline getOffset q =
         Queue.getOffset durableQueueOps.GetOffset q
@@ -118,29 +123,25 @@ let private agent
                 >>= loop
             | Msg action ->
                 match action with
-                | Poll (conKeyMax, msgCountMax, replyCh) ->
-                    data.Queues
-                    |> Hamt.toSeqPairs
-                    |> PollKeyChoosingStrategy.roundRobin
-                        headN
-                        data.RandomState
-                        conKeyMax
-                        (1000
-                         |> float
-                         |> System.TimeSpan.FromMilliseconds
-                         |> Some)
-                    >>= fun (randomState, pairs) ->
-                            pairs
-                            |> Seq.map
-                                (fun (key, queue) ->
-                                    (headN msgCountMax queue
-                                     >>- fun items -> key, items, getOffset queue))
-                            |> Job.conCollect
-                            >>- fun results -> randomState, results |> Seq.toList
-                    >>= fun (randomState, results) ->
-                            IVar.fill replyCh results
-                            >>-. {| data with
-                                        RandomState = randomState |}
+                | Poll (conKeyMax, msgCountMax, timeout, replyCh) ->
+                    timeOut timeout
+                    |> Promise.start
+                    >>= fun timedOut ->
+                            data.Queues
+                            |> Hamt.toSeqPairs
+                            |> PollKeyChoosingStrategy.roundRobin headN data.RandomState timedOut conKeyMax
+                            >>= fun (randomState, pairs) ->
+                                    pairs
+                                    |> Seq.map
+                                        (fun (key, queue) ->
+                                            (headN timedOut msgCountMax queue
+                                             >>- fun items -> key, items, getOffset queue))
+                                    |> Job.conCollect
+                                    >>- fun results -> randomState, results |> Seq.toList
+                            >>= fun (randomState, results) ->
+                                    IVar.fill replyCh results
+                                    >>-. {| data with
+                                                RandomState = randomState |}
                     >>= loop
                 | Ack (key, requestedOffset, replyCh) ->
                     data.Queues

@@ -6,7 +6,20 @@ open Hopac
 open Hopac.Infixes
 open Zhukov.Broker
 open Zhukov.Logging
-open FSharpPlusHopac
+open Hopac.FSharpPlus
+
+type Durable<'T> = { Stream: 'T Stream; Offset: Offset;  }
+
+let getOffset { Offset = offset } = offset
+
+let headN t n s = Stream.headN t n s
+
+let maybeMoveOffset requestedOffset { Stream = stream; Offset = currentOffset } =
+    let diff = requestedOffset - currentOffset
+    if diff > zeroOffset then
+        Some { Stream = Stream.skip (int64 diff) stream; Offset = requestedOffset }
+    else
+        None
 
 [<EntryPoint>]
 let main argv =
@@ -32,23 +45,9 @@ let main argv =
         let! consumer1 =
             Consumer.create
                 (FsRandom.Utility.createRandomState ())
-                {| Count = fun { Durable.Queue = q } -> Flux.Collections.Queue.count q
-                   Offset = fun { Offset = o } -> o
-                   Pop =
-                       fun target { Queue = q; Offset = o } ->
-                           let rec loop q o =
-                               if o = target then
-                                   { Durable.Queue = q
-                                     Durable.Offset = o }
-                               else
-                                   loop (Flux.Collections.Queue.tail q) (o + offset 1)
-
-                           loop q o
-                   Push =
-                       fun x q ->
-                           { q with
-                                 Durable.Queue = Flux.Collections.Queue.snoc x q.Queue }
-                   ToSeq = fun { Durable.Queue = q; Offset = o } -> Flux.Collections.Queue.toSeq q |}
+                {| GetOffset = getOffset
+                   HeadN = headN
+                   MaybeMoveOffset = 1 |}
                 {| Return = fun x y -> Job.result () |}
                 (fun x -> Job.result ())
 
