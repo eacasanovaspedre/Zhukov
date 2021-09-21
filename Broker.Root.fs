@@ -42,7 +42,7 @@ type Message =
 module Root =
 
     type Action<'Client> =
-        | AddMessage of ChannelId * MessageKey * Message //TODO
+        | AddMessage of ChannelId * MessageKey * Message
         | NewConsumer of DurableId * ConsumerId * 'Client
 
     let private agent createDurable sendClientToDurable takeMsg =

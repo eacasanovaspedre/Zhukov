@@ -12,7 +12,7 @@ type Durable<'T> = { Stream: 'T Stream; Offset: Offset;  }
 
 let getOffset { Offset = offset } = offset
 
-let headN t n s = Stream.headN t n s
+let headN t n { Stream = s } = Stream.headN t n s
 
 let maybeMoveOffset requestedOffset { Stream = stream; Offset = currentOffset } =
     let diff = requestedOffset - currentOffset
@@ -20,6 +20,7 @@ let maybeMoveOffset requestedOffset { Stream = stream; Offset = currentOffset } 
         Some { Stream = Stream.skip (int64 diff) stream; Offset = requestedOffset }
     else
         None
+    |> Job.result
 
 [<EntryPoint>]
 let main argv =
@@ -47,7 +48,7 @@ let main argv =
                 (FsRandom.Utility.createRandomState ())
                 {| GetOffset = getOffset
                    HeadN = headN
-                   MaybeMoveOffset = 1 |}
+                   MaybeMoveOffset = maybeMoveOffset |}
                 {| Return = fun x y -> Job.result () |}
                 (fun x -> Job.result ())
 
@@ -55,7 +56,7 @@ let main argv =
             Shutdown.register
                 (Some "consumer1")
                 (fun () ->
-                    MailboxProcessorStop.stop consumer1.Mailbox
+                    MailboxProcessorStop.stop consumer1.Mailbox ()
                     >>=. consumer1.Stopped
                     >>- ignore)
                 []

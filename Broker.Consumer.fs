@@ -54,7 +54,7 @@ type Action<'T, 'Queue> =
 module PollKeyChoosingStrategy =
 
     let roundRobin headN randomState timedOut maxKeys pairs =
-        let latch = Latch(maxKeys)
+        let latch = Latch maxKeys
 
         pairs
         |> Seq.map

@@ -84,18 +84,18 @@ let shutdownJob onShutdownReceived onMsgReceived onModShuttingDown onModShutDown
     >>- tap (fun x ->
                 AppDomain.CurrentDomain.ProcessExit.Subscribe
                     (fun _ ->
-                        MailboxProcessorStop.stop x.Mailbox >>=. x.Stopped
+                        MailboxProcessorStop.stop x.Mailbox () >>=. x.Stopped
                         |> run)
                 |> ignore
 
                 Console.CancelKeyPress.Subscribe
                     (fun _ ->
-                        MailboxProcessorStop.stop x.Mailbox >>=. x.Stopped
+                        MailboxProcessorStop.stop x.Mailbox () >>=. x.Stopped
                         |> run)
                 |> ignore)
 
-let register jobId jobShutdown jobDependencies mailbox =
-    MailboxProcessorStop.sendAndAwaitReply mailbox (fun ivar -> Register(jobId, jobShutdown, jobDependencies, ivar))
+let register jobName jobShutdown jobDependencies mailbox =
+    MailboxProcessorStop.sendAndAwaitReply mailbox (fun ivar -> Register(jobName, jobShutdown, jobDependencies, ivar))
 
 let unregister jobId mailbox =
     MailboxProcessorStop.send mailbox (Unregister jobId)
